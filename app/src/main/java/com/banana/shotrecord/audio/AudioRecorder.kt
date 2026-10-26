@@ -23,7 +23,6 @@ class AudioRecorder(context: Context) {
         val dir = File(appContext.getExternalFilesDir(null) ?: appContext.filesDir, "recordings")
             .apply { mkdirs() }
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        val file = File(dir, "rec_$stamp.m4a")
 
         val r = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             MediaRecorder(appContext)
@@ -32,11 +31,26 @@ class AudioRecorder(context: Context) {
             MediaRecorder()
         }
         r.setAudioSource(MediaRecorder.AudioSource.MIC)
-        r.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-        r.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-        r.setAudioEncodingBitRate(128_000)
-        r.setAudioSamplingRate(44_100)
-        r.setAudioChannels(1)
+
+        // API 29+ 用 OGG/Opus:转写服务原生支持、文件更小;旧系统回退 AAC/M4A
+        val extension: String
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            r.setOutputFormat(MediaRecorder.OutputFormat.OGG)
+            r.setAudioEncoder(MediaRecorder.AudioEncoder.OPUS)
+            r.setAudioEncodingBitRate(32_000)
+            r.setAudioSamplingRate(16_000)
+            r.setAudioChannels(1)
+            extension = "ogg"
+        } else {
+            r.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+            r.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+            r.setAudioEncodingBitRate(128_000)
+            r.setAudioSamplingRate(44_100)
+            r.setAudioChannels(1)
+            extension = "m4a"
+        }
+
+        val file = File(dir, "rec_$stamp.$extension")
         r.setOutputFile(file.absolutePath)
         r.prepare()
         r.start()

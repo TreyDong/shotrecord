@@ -17,4 +17,21 @@
     <string name="delete">删除</string>
     <string name="delete_confirm_title">删除录音</string>
     <string name="delete_confirm_message">确定删除这条录音吗?删除后无法恢复。</string>
+
+    <string name="settings">设置</string>
+    <string name="back">返回</string>
+    <string name="cancel">取消</string>
+    <string name="asr_settings_title">豆包语音转写(火山引擎)</string>
+    <string name="asr_app_key_hint">App Key(新版控制台)/ App ID(旧版控制台)</string>
+    <string name="asr_token_hint">Access Token(仅旧版控制台需要,新版留空)</string>
+    <string name="asr_resource_id_hint">服务资源 ID</string>
+    <string name="asr_auto_switch">录音完成后自动转写</string>
+    <string name="save">保存</string>
+    <string name="saved">已保存</string>
+    <string name="asr_help_text">获取方式:火山引擎控制台 → 语音技术 → 豆包语音大模型 → 应用管理,创建应用并开通「录音文件识别极速版」,即可在应用详情中查看 App Key / Access Token。凭据仅保存在本机,不会上传。</string>
+    <string name="transcribe">转文字</string>
+    <string name="transcribing">正在转写…</string>
+    <string name="transcribe_failed">转写失败,点击「转文字」重试</string>
+    <string name="asr_not_configured">请先在「设置」中配置豆包语音转写</string>
+    <string name="transcribe_error_toast">转写失败:%1$s</string>
 </resources>
