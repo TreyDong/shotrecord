@@ -1,0 +1,20 @@
+<resources>
+    <string name="app_name">ShotRecord</string>
+    <string name="status_idle">点击按钮开始录音</string>
+    <string name="status_recording">正在录音…</string>
+    <string name="timer_zero">00:00</string>
+    <string name="record_start">开始录音</string>
+    <string name="record_stop">停止录音</string>
+    <string name="record_list_title">录音列表</string>
+    <string name="record_duration">时长 %1$s</string>
+    <string name="empty_list">还没有录音,点上方按钮开始</string>
+    <string name="permission_denied">需要麦克风权限才能录音</string>
+    <string name="record_start_failed">录音启动失败</string>
+    <string name="record_too_short">录音时间太短,已丢弃</string>
+    <string name="play">播放</string>
+    <string name="pause">暂停</string>
+    <string name="play_failed">播放失败</string>
+    <string name="delete">删除</string>
+    <string name="delete_confirm_title">删除录音</string>
+    <string name="delete_confirm_message">确定删除这条录音吗?删除后无法恢复。</string>
+</resources>
