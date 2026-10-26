@@ -17,6 +17,13 @@ class AudioRecorder(context: Context) {
 
     val isRecording: Boolean get() = recorder != null
 
+    /** 当前麦克风振幅(0..1),未在录音时返回 0;用于实时波形 */
+    fun amplitude(): Float = try {
+        (recorder?.maxAmplitude ?: 0) / 32767f
+    } catch (_: Exception) {
+        0f
+    }
+
     /** 开始录音,返回正在写入的文件 */
     fun start(): File {
         check(recorder == null) { "Already recording" }

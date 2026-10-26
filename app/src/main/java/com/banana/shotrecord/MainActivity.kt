@@ -15,14 +15,18 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,6 +39,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -51,12 +57,9 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -66,7 +69,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -79,25 +81,32 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.banana.shotrecord.audio.AudioRecorder
 import com.banana.shotrecord.data.AsrSettings
 import com.banana.shotrecord.data.Record
 import com.banana.shotrecord.data.RecordStore
 import com.banana.shotrecord.network.DoubaoAsrClient
+import com.banana.shotrecord.ui.LocalBrand
 import com.banana.shotrecord.ui.ShotRecordTheme
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+import kotlin.math.min
+import kotlin.random.Random
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -121,7 +130,15 @@ private fun formatDuration(ms: Long): String {
     return String.format(Locale.US, "%02d:%02d", totalSeconds / 60, totalSeconds % 60)
 }
 
-private val dateFormat = SimpleDateFormat("yyyy年M月d日 HH:mm", Locale.getDefault())
+private val dateFormat = SimpleDateFormat("M月d日 HH:mm", Locale.getDefault())
+
+/** 大号细字重计时数字:等宽数字避免跳动 */
+private val TimerStyle = TextStyle(
+    fontSize = 64.sp,
+    fontWeight = FontWeight.ExtraLight,
+    letterSpacing = 2.sp,
+    fontFeatureSettings = "tnum",
+)
 
 @Composable
 fun ShotRecordApp() {
@@ -137,6 +154,7 @@ fun ShotRecordApp() {
     var isRecording by remember { mutableStateOf(false) }
     var recordStartAt by remember { mutableLongStateOf(0L) }
     var elapsedMs by remember { mutableLongStateOf(0L) }
+    var amplitudes by remember { mutableStateOf<List<Float>>(emptyList()) }
     var transcribingIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var failedIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var playingId by remember { mutableStateOf<Long?>(null) }
@@ -196,6 +214,7 @@ fun ShotRecordApp() {
         }
         recordStartAt = System.currentTimeMillis()
         elapsedMs = 0
+        amplitudes = emptyList()
         isRecording = true
     }
 
@@ -203,6 +222,7 @@ fun ShotRecordApp() {
         val duration = System.currentTimeMillis() - recordStartAt
         val file = recorder.stop()
         isRecording = false
+        amplitudes = emptyList()
         if (file == null) {
             snackbar(context.getString(R.string.record_too_short))
         } else {
@@ -266,10 +286,14 @@ fun ShotRecordApp() {
         }
     }
 
+    // 计时 + 实时声浪采样(80ms 一格,保留 28 根)
     LaunchedEffect(isRecording) {
         while (isRecording) {
             elapsedMs = System.currentTimeMillis() - recordStartAt
-            delay(200)
+            val amp = recorder.amplitude()
+            val normalized = 0.12f + min(1f, amp) * 0.88f
+            amplitudes = (amplitudes + normalized).takeLast(28)
+            delay(80)
         }
     }
 
@@ -290,6 +314,7 @@ fun ShotRecordApp() {
                 records = records,
                 isRecording = isRecording,
                 elapsedMs = elapsedMs,
+                amplitudes = amplitudes,
                 playingId = playingId,
                 transcribingIds = transcribingIds,
                 failedIds = failedIds,
@@ -330,6 +355,7 @@ private fun HomeScreen(
     records: List<Record>,
     isRecording: Boolean,
     elapsedMs: Long,
+    amplitudes: List<Float>,
     playingId: Long?,
     transcribingIds: Set<Long>,
     failedIds: Set<Long>,
@@ -339,148 +365,256 @@ private fun HomeScreen(
     onTranscribe: (Record) -> Unit,
     onDelete: (Record) -> Unit,
 ) {
-    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(rememberTopAppBarState())
-
     Scaffold(
-        modifier = Modifier
-            .fillMaxSize()
-            .nestedScroll(scrollBehavior.nestedScrollConnection),
-        topBar = {
-            LargeTopAppBar(
-                title = { Text(stringResource(R.string.app_name)) },
-                actions = {
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(
-                            Icons.Filled.Settings,
-                            contentDescription = stringResource(R.string.settings),
-                        )
-                    }
-                },
-                scrollBehavior = scrollBehavior,
-            )
-        },
+        containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
             RecordBar(
                 isRecording = isRecording,
                 elapsedMs = elapsedMs,
+                amplitudes = amplitudes,
                 onRecordButton = onRecordButton,
             )
         },
     ) { innerPadding ->
-        if (records.isEmpty()) {
-            Box(
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .statusBarsPadding(),
+        ) {
+            // 编辑感头部:大标题 + 标语 + 玻璃圆设置钮
+            Row(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding),
-                contentAlignment = Alignment.Center,
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 18.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        Icons.Filled.Mic,
-                        contentDescription = null,
-                        modifier = Modifier.size(56.dp),
-                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
-                    )
-                    Spacer(Modifier.height(12.dp))
+                Column(Modifier.weight(1f)) {
                     Text(
-                        stringResource(R.string.empty_list),
-                        style = MaterialTheme.typography.bodyLarge,
+                        stringResource(R.string.app_name),
+                        style = MaterialTheme.typography.headlineLarge,
+                        fontWeight = FontWeight.Black,
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        stringResource(R.string.home_tagline),
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = innerPadding,
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                items(records, key = { it.id }) { record ->
-                    RecordCard(
-                        record = record,
-                        isPlaying = playingId == record.id,
-                        isTranscribing = record.id in transcribingIds,
-                        isFailed = record.id in failedIds,
-                        onPlay = { onPlay(record) },
-                        onTranscribe = { onTranscribe(record) },
-                        onDelete = { onDelete(record) },
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .border(1.dp, LocalBrand.current.cardBorder, CircleShape)
+                        .clickable(onClick = onOpenSettings),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Filled.Settings,
+                        contentDescription = stringResource(R.string.settings),
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(20.dp),
                     )
                 }
-                item { Spacer(Modifier.height(8.dp)) }
+            }
+
+            if (records.isEmpty()) {
+                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Box(
+                            modifier = Modifier.size(120.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Box(
+                                Modifier
+                                    .size(120.dp)
+                                    .background(
+                                        Brush.radialGradient(
+                                            listOf(
+                                                LocalBrand.current.glowColor.copy(alpha = 0.22f),
+                                                Color.Transparent,
+                                            )
+                                        ),
+                                        CircleShape,
+                                    ),
+                            )
+                            Icon(
+                                Icons.Filled.Mic,
+                                contentDescription = null,
+                                modifier = Modifier.size(40.dp),
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                        Spacer(Modifier.height(20.dp))
+                        Text(
+                            stringResource(R.string.empty_title),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            stringResource(R.string.empty_hint),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        start = 20.dp, end = 20.dp, bottom = 16.dp,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    items(records, key = { it.id }) { record ->
+                        RecordCard(
+                            record = record,
+                            isPlaying = playingId == record.id,
+                            isTranscribing = record.id in transcribingIds,
+                            isFailed = record.id in failedIds,
+                            onPlay = { onPlay(record) },
+                            onTranscribe = { onTranscribe(record) },
+                            onDelete = { onDelete(record) },
+                        )
+                    }
+                }
             }
         }
     }
 }
 
+/** 底部录音区:实时声浪 + 计时 + 渐变光环按钮 */
 @Composable
-private fun RecordBar(isRecording: Boolean, elapsedMs: Long, onRecordButton: () -> Unit) {
+private fun RecordBar(
+    isRecording: Boolean,
+    elapsedMs: Long,
+    amplitudes: List<Float>,
+    onRecordButton: () -> Unit,
+) {
+    val brand = LocalBrand.current
     val pulse = rememberInfiniteTransition(label = "pulse")
-    val scale by pulse.animateFloat(
-        initialValue = 0.96f,
-        targetValue = 1.06f,
+    val pulseAlpha by pulse.animateFloat(
+        initialValue = 0.55f,
+        targetValue = 0f,
         animationSpec = infiniteRepeatable(
-            animation = tween(900, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
+            animation = tween(1100, easing = FastOutSlowInEasing),
         ),
-        label = "scale",
+        label = "pulseAlpha",
     )
-    val buttonColor by animateFloatAsState(
-        targetValue = if (isRecording) 1f else 0f,
-        label = "recordColorProgress",
+    val pulseScale by pulse.animateFloat(
+        initialValue = 1f,
+        targetValue = 1.45f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1100, easing = FastOutSlowInEasing),
+        ),
+        label = "pulseScale",
     )
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .navigationBarsPadding()
-            .padding(bottom = 20.dp, top = 8.dp),
+            .padding(bottom = 26.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        AnimatedContent(targetState = isRecording, label = "timer") { recording ->
+        AnimatedContent(targetState = isRecording, label = "timerZone") { recording ->
             if (recording) {
-                Text(
-                    formatDuration(elapsedMs),
-                    style = MaterialTheme.typography.displaySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-        }
-        Box(Modifier.size(76.dp), contentAlignment = Alignment.Center) {
-            ExtendedFloatingActionButton(
-                onClick = onRecordButton,
-                shape = CircleShape,
-                containerColor = if (buttonColor > 0.5f) {
-                    MaterialTheme.colorScheme.error
-                } else {
-                    MaterialTheme.colorScheme.primary
-                },
-                contentColor = Color.White,
-                modifier = Modifier
-                    .size(76.dp)
-                    .graphicsLayer {
-                        val s = if (isRecording) scale else 1f
-                        scaleX = s
-                        scaleY = s
-                    },
-            ) {
-                if (isRecording) {
-                    Icon(
-                        Icons.Filled.Stop,
-                        contentDescription = stringResource(R.string.record_stop),
-                        modifier = Modifier.size(32.dp),
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    // 实时声浪
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center,
+                        modifier = Modifier.height(28.dp),
+                    ) {
+                        val bars = if (amplitudes.size < 28) {
+                            amplitudes + List(28 - amplitudes.size) { 0.12f }
+                        } else {
+                            amplitudes
+                        }
+                        bars.forEach { amp ->
+                            Box(
+                                Modifier
+                                    .padding(horizontal = 2.dp)
+                                    .size(width = 3.dp, height = (4.dp.value + 24.dp.value * amp).dp)
+                                    .background(
+                                        MaterialTheme.colorScheme.primary,
+                                        RoundedCornerShape(2.dp),
+                                    ),
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        formatDuration(elapsedMs),
+                        style = TimerStyle,
+                        color = MaterialTheme.colorScheme.onBackground,
                     )
-                } else {
-                    Icon(
-                        Icons.Filled.Mic,
-                        contentDescription = stringResource(R.string.record_start),
-                        modifier = Modifier.size(32.dp),
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        stringResource(R.string.status_recording),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+            } else {
+                Spacer(Modifier.height(96.dp))
+            }
+        }
+
+        Box(contentAlignment = Alignment.Center) {
+            // 录音时的呼吸光环
+            if (isRecording) {
+                Box(
+                    Modifier
+                        .size(96.dp)
+                        .graphicsLayer {
+                            scaleX = pulseScale
+                            scaleY = pulseScale
+                            this.alpha = pulseAlpha
+                        }
+                        .background(brand.recordGradient, CircleShape),
+                )
+            } else {
+                // 待机时的品牌光晕
+                Box(
+                    Modifier
+                        .size(110.dp)
+                        .background(
+                            Brush.radialGradient(
+                                listOf(brand.glowColor.copy(alpha = 0.25f), Color.Transparent)
+                            ),
+                            CircleShape,
+                        ),
+                )
+            }
+            // 渐变主按钮
+            Box(
+                modifier = Modifier
+                    .size(84.dp)
+                    .background(
+                        if (isRecording) brand.recordGradient else brand.brandGradient,
+                        CircleShape,
+                    )
+                    .clickable(onClick = onRecordButton),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    if (isRecording) Icons.Filled.Stop else Icons.Filled.Mic,
+                    contentDescription = stringResource(
+                        if (isRecording) R.string.record_stop else R.string.record_start
+                    ),
+                    tint = Color.White,
+                    modifier = Modifier.size(30.dp),
+                )
             }
         }
     }
 }
 
+/** 玻璃质感录音卡片 */
 @Composable
 private fun RecordCard(
     record: Record,
@@ -492,89 +626,115 @@ private fun RecordCard(
     onDelete: () -> Unit,
 ) {
     var expanded by rememberSaveable(record.id) { mutableStateOf(false) }
+    val brand = LocalBrand.current
 
-    ElevatedCard(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp),
-        shape = RoundedCornerShape(24.dp),
+            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(22.dp))
+            .border(1.dp, brand.cardBorder, RoundedCornerShape(22.dp))
+            .padding(18.dp),
     ) {
-        Column(Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        dateFormat.format(Date(record.createdAt)),
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                    Text(
-                        stringResource(R.string.record_duration, formatDuration(record.durationMs)),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                IconButton(onClick = onPlay) {
-                    Icon(
-                        if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                        contentDescription = stringResource(if (isPlaying) R.string.pause else R.string.play),
-                        tint = if (isPlaying) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                    )
-                }
-                IconButton(onClick = onDelete) {
-                    Icon(
-                        Icons.Filled.Delete,
-                        contentDescription = stringResource(R.string.delete),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    dateFormat.format(Date(record.createdAt)),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    stringResource(R.string.record_duration, formatDuration(record.durationMs)),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
+            // 装饰波形:由录音 id 生成确定性形状
+            WaveformDecor(record.id, tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
+            Spacer(Modifier.width(6.dp))
+            IconButton(onClick = onPlay) {
+                Icon(
+                    if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                    contentDescription = stringResource(if (isPlaying) R.string.pause else R.string.play),
+                    tint = if (isPlaying) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
+            IconButton(onClick = onDelete) {
+                Icon(
+                    Icons.Filled.Delete,
+                    contentDescription = stringResource(R.string.delete),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
 
-            when {
-                isTranscribing -> {
-                    Spacer(Modifier.height(8.dp))
-                    LinearProgressIndicator(Modifier.fillMaxWidth())
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        stringResource(R.string.transcribing),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                isFailed -> {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        stringResource(R.string.transcribe_failed),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.clickable(onClick = onTranscribe),
-                    )
-                }
-                record.transcript != null -> {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        record.transcript,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = if (expanded) Int.MAX_VALUE else 3,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.clickable { expanded = !expanded },
-                    )
-                }
-                else -> {
-                    Text(
-                        stringResource(R.string.transcribe),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .padding(top = 4.dp)
-                            .clickable(onClick = onTranscribe)
-                            .padding(vertical = 8.dp),
-                    )
-                }
+        when {
+            isTranscribing -> {
+                Spacer(Modifier.height(10.dp))
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth(),
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    stringResource(R.string.transcribing),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
+            isFailed -> {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    stringResource(R.string.transcribe_failed),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.clickable(onClick = onTranscribe),
+                )
+            }
+            record.transcript != null -> {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    record.transcript,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = if (expanded) Int.MAX_VALUE else 3,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.clickable { expanded = !expanded },
+                )
+            }
+            else -> {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    stringResource(R.string.transcribe),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .clickable(onClick = onTranscribe),
+                )
+            }
+        }
+    }
+}
+
+/** 由 id 确定性生成的一组装饰波形条 */
+@Composable
+private fun WaveformDecor(id: Long, tint: Color) {
+    val bars = remember(id) {
+        val r = Random(id * 31 + 7)
+        List(18) { 0.18f + r.nextFloat() * 0.82f }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        bars.forEach { amp ->
+            Box(
+                Modifier
+                    .padding(horizontal = 1.dp)
+                    .size(width = 2.dp, height = (3.dp.value + 14.dp.value * amp).dp)
+                    .background(tint, RoundedCornerShape(1.dp)),
+            )
         }
     }
 }
@@ -591,8 +751,12 @@ private fun SettingsScreen(
     var autoTranscribe by rememberSaveable { mutableStateOf(asrSettings.autoTranscribe) }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                ),
                 title = { Text(stringResource(R.string.settings)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -610,7 +774,7 @@ private fun SettingsScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
-                .padding(16.dp),
+                .padding(horizontal = 20.dp),
         ) {
             Text(
                 stringResource(R.string.asr_settings_title),
@@ -623,6 +787,7 @@ private fun SettingsScreen(
                 onValueChange = { appKey = it },
                 label = { Text(stringResource(R.string.asr_app_key_hint)) },
                 singleLine = true,
+                shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.height(12.dp))
@@ -631,6 +796,7 @@ private fun SettingsScreen(
                 onValueChange = { accessToken = it },
                 label = { Text(stringResource(R.string.asr_token_hint)) },
                 singleLine = true,
+                shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.height(12.dp))
@@ -639,6 +805,7 @@ private fun SettingsScreen(
                 onValueChange = { resourceId = it },
                 label = { Text(stringResource(R.string.asr_resource_id_hint)) },
                 singleLine = true,
+                shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.height(8.dp))
@@ -663,7 +830,10 @@ private fun SettingsScreen(
                     onSaved()
                     onBack()
                 },
-                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp),
             ) {
                 Text(stringResource(R.string.save))
             }

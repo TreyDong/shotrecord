@@ -1,5 +1,8 @@
 <resources>
     <string name="app_name">ShotRecord</string>
+    <string name="home_tagline">声音想法,一按即录</string>
+    <string name="empty_title">还没有录音</string>
+    <string name="empty_hint">按下下方按钮,开始你的第一条语音</string>
     <string name="status_idle">点击按钮开始录音</string>
     <string name="status_recording">正在录音…</string>
     <string name="timer_zero">00:00</string>
