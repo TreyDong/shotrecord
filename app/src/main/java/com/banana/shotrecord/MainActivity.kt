@@ -13,11 +13,11 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
@@ -25,9 +25,12 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -64,15 +67,19 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -82,10 +89,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -147,6 +159,7 @@ fun ShotRecordApp() {
     val asrSettings = remember { AsrSettings(context) }
     val recorder = remember { AudioRecorder(context) }
     val scope = rememberCoroutineScope()
+    val haptics = LocalHapticFeedback.current
     val transcribeExecutor = remember { Executors.newSingleThreadExecutor() }
 
     var screen by rememberSaveable { mutableStateOf("home") }
@@ -158,6 +171,7 @@ fun ShotRecordApp() {
     var transcribingIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var failedIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var playingId by remember { mutableStateOf<Long?>(null) }
+    var playbackProgress by remember { mutableFloatStateOf(0f) }
     var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
     var pendingDelete by remember { mutableStateOf<Record?>(null) }
 
@@ -180,6 +194,7 @@ fun ShotRecordApp() {
         }
         mediaPlayer = null
         playingId = null
+        playbackProgress = 0f
     }
 
     val transcribe: (Record) -> Unit = transcribe@{ record ->
@@ -212,6 +227,7 @@ fun ShotRecordApp() {
             snackbar(context.getString(R.string.record_start_failed))
             return@startRecording
         }
+        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
         recordStartAt = System.currentTimeMillis()
         elapsedMs = 0
         amplitudes = emptyList()
@@ -223,6 +239,7 @@ fun ShotRecordApp() {
         val file = recorder.stop()
         isRecording = false
         amplitudes = emptyList()
+        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
         if (file == null) {
             snackbar(context.getString(R.string.record_too_short))
         } else {
@@ -261,7 +278,10 @@ fun ShotRecordApp() {
             player.setDataSource(record.filePath)
             player.setOnCompletionListener {
                 player.release()
-                if (playingId == record.id) playingId = null
+                if (playingId == record.id) {
+                    playingId = null
+                    playbackProgress = 0f
+                }
             }
             player.prepare()
             player.start()
@@ -297,6 +317,21 @@ fun ShotRecordApp() {
         }
     }
 
+    // 播放进度采样(驱动波形染色与进度环)
+    LaunchedEffect(playingId) {
+        while (playingId != null) {
+            val player = mediaPlayer ?: break
+            playbackProgress = try {
+                val duration = player.duration
+                if (duration > 0) (player.currentPosition.toFloat() / duration) else 0f
+            } catch (_: IllegalStateException) {
+                break
+            }
+            delay(100)
+        }
+        playbackProgress = 0f
+    }
+
     LaunchedEffect(Unit) { reload() }
 
     AnimatedContent(
@@ -316,6 +351,7 @@ fun ShotRecordApp() {
                 elapsedMs = elapsedMs,
                 amplitudes = amplitudes,
                 playingId = playingId,
+                playbackProgress = playbackProgress,
                 transcribingIds = transcribingIds,
                 failedIds = failedIds,
                 onRecordButton = onRecordButton,
@@ -334,6 +370,7 @@ fun ShotRecordApp() {
             text = { Text(stringResource(R.string.delete_confirm_message)) },
             confirmButton = {
                 TextButton(onClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                     if (playingId == record.id) stopPlayback()
                     store.delete(record.id)
                     File(record.filePath).delete()
@@ -357,6 +394,7 @@ private fun HomeScreen(
     elapsedMs: Long,
     amplitudes: List<Float>,
     playingId: Long?,
+    playbackProgress: Float,
     transcribingIds: Set<Long>,
     failedIds: Set<Long>,
     onRecordButton: () -> Unit,
@@ -471,8 +509,10 @@ private fun HomeScreen(
                 ) {
                     items(records, key = { it.id }) { record ->
                         RecordCard(
+                            modifier = Modifier.animateItem(),
                             record = record,
                             isPlaying = playingId == record.id,
+                            playbackProgress = playbackProgress,
                             isTranscribing = record.id in transcribingIds,
                             isFailed = record.id in failedIds,
                             onPlay = { onPlay(record) },
@@ -511,6 +551,15 @@ private fun RecordBar(
             animation = tween(1100, easing = FastOutSlowInEasing),
         ),
         label = "pulseScale",
+    )
+
+    // 按压时按钮轻微缩小,松手回弹
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val buttonScale by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (pressed) 0.92f else 1f,
+        animationSpec = spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMedium),
+        label = "buttonScale",
     )
 
     Column(
@@ -594,31 +643,103 @@ private fun RecordBar(
             Box(
                 modifier = Modifier
                     .size(84.dp)
+                    .scale(buttonScale)
                     .background(
                         if (isRecording) brand.recordGradient else brand.brandGradient,
                         CircleShape,
                     )
-                    .clickable(onClick = onRecordButton),
+                    .clickable(
+                        interactionSource = interaction,
+                        indication = null,
+                        onClick = onRecordButton,
+                    ),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(
-                    if (isRecording) Icons.Filled.Stop else Icons.Filled.Mic,
-                    contentDescription = stringResource(
-                        if (isRecording) R.string.record_stop else R.string.record_start
-                    ),
-                    tint = Color.White,
-                    modifier = Modifier.size(30.dp),
-                )
+                Crossfade(
+                    targetState = isRecording,
+                    animationSpec = tween(180),
+                    label = "recordIcon",
+                ) { recording ->
+                    Icon(
+                        if (recording) Icons.Filled.Stop else Icons.Filled.Mic,
+                        contentDescription = stringResource(
+                            if (recording) R.string.record_stop else R.string.record_start
+                        ),
+                        tint = Color.White,
+                        modifier = Modifier.size(30.dp),
+                    )
+                }
             }
         }
     }
 }
 
-/** 玻璃质感录音卡片 */
+/** 滑动删除包裹的玻璃质感录音卡片;播放时波形按进度染色 */
 @Composable
 private fun RecordCard(
+    modifier: Modifier,
     record: Record,
     isPlaying: Boolean,
+    playbackProgress: Float,
+    isTranscribing: Boolean,
+    isFailed: Boolean,
+    onPlay: () -> Unit,
+    onTranscribe: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val brand = LocalBrand.current
+    val haptics = LocalHapticFeedback.current
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            if (value == SwipeToDismissBoxValue.EndToStart) {
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                onDelete()
+            }
+            // 始终回弹:真正的删除由确认对话框完成
+            false
+        },
+        positionalThreshold = { total -> total * 0.55f },
+    )
+
+    SwipeToDismissBox(
+        state = dismissState,
+        modifier = modifier,
+        enableDismissFromStartToEnd = false,
+        backgroundContent = {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(brand.recordGradient),
+                contentAlignment = Alignment.CenterEnd,
+            ) {
+                Icon(
+                    Icons.Filled.Delete,
+                    contentDescription = stringResource(R.string.delete),
+                    tint = Color.White,
+                    modifier = Modifier.padding(horizontal = 28.dp),
+                )
+            }
+        },
+    ) {
+        RecordCardContent(
+            record = record,
+            isPlaying = isPlaying,
+            playbackProgress = playbackProgress,
+            isTranscribing = isTranscribing,
+            isFailed = isFailed,
+            onPlay = onPlay,
+            onTranscribe = onTranscribe,
+            onDelete = onDelete,
+        )
+    }
+}
+
+@Composable
+private fun RecordCardContent(
+    record: Record,
+    isPlaying: Boolean,
+    playbackProgress: Float,
     isTranscribing: Boolean,
     isFailed: Boolean,
     onPlay: () -> Unit,
@@ -649,19 +770,48 @@ private fun RecordCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            // 装饰波形:由录音 id 生成确定性形状
-            WaveformDecor(record.id, tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
-            Spacer(Modifier.width(6.dp))
-            IconButton(onClick = onPlay) {
-                Icon(
-                    if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                    contentDescription = stringResource(if (isPlaying) R.string.pause else R.string.play),
-                    tint = if (isPlaying) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
+            // 装饰波形:播放时按进度染色
+            WaveformDecor(
+                id = record.id,
+                progress = if (isPlaying) playbackProgress else 0f,
+                playedColor = MaterialTheme.colorScheme.primary,
+                idleColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
+            )
+            Spacer(Modifier.width(2.dp))
+            // 播放按钮:播放中显示圆形进度环
+            Box(contentAlignment = Alignment.Center) {
+                if (isPlaying) {
+                    val ringTrack = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
+                    val ringFill = MaterialTheme.colorScheme.primary
+                    Canvas(Modifier.size(44.dp)) {
+                        val stroke = 2.dp.toPx()
+                        drawArc(
+                            color = ringTrack,
+                            startAngle = -90f,
+                            sweepAngle = 360f,
+                            useCenter = false,
+                            style = Stroke(stroke, cap = StrokeCap.Round),
+                        )
+                        drawArc(
+                            color = ringFill,
+                            startAngle = -90f,
+                            sweepAngle = 360f * playbackProgress,
+                            useCenter = false,
+                            style = Stroke(stroke, cap = StrokeCap.Round),
+                        )
+                    }
+                }
+                IconButton(onClick = onPlay) {
+                    Icon(
+                        if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                        contentDescription = stringResource(if (isPlaying) R.string.pause else R.string.play),
+                        tint = if (isPlaying) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
             }
             IconButton(onClick = onDelete) {
                 Icon(
@@ -720,20 +870,29 @@ private fun RecordCard(
     }
 }
 
-/** 由 id 确定性生成的一组装饰波形条 */
+/** 由 id 确定性生成的一组装饰波形条;progress>0 时按播放进度染色 */
 @Composable
-private fun WaveformDecor(id: Long, tint: Color) {
+private fun WaveformDecor(
+    id: Long,
+    progress: Float,
+    playedColor: Color,
+    idleColor: Color,
+) {
     val bars = remember(id) {
         val r = Random(id * 31 + 7)
         List(18) { 0.18f + r.nextFloat() * 0.82f }
     }
+    val playedCount = (progress * bars.size).toInt()
     Row(verticalAlignment = Alignment.CenterVertically) {
-        bars.forEach { amp ->
+        bars.forEachIndexed { index, amp ->
             Box(
                 Modifier
                     .padding(horizontal = 1.dp)
                     .size(width = 2.dp, height = (3.dp.value + 14.dp.value * amp).dp)
-                    .background(tint, RoundedCornerShape(1.dp)),
+                    .background(
+                        if (index < playedCount) playedColor else idleColor,
+                        RoundedCornerShape(1.dp),
+                    ),
             )
         }
     }
